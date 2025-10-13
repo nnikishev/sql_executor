@@ -17,7 +17,7 @@ PostgresConnector::~PostgresConnector() {
 
 bool PostgresConnector::connect(const std::string& conninfo) {
     connection_ = PQconnectdb(conninfo.c_str());
-    in_transaction_ = false;  
+    in_transaction_ = false;
     return PQstatus(connection_) == CONNECTION_OK;
 }
 
@@ -57,7 +57,6 @@ bool PostgresConnector::execute_simple_query(const std::string& query) {
     return success;
 }
 
-
 bool PostgresConnector::begin_transaction() {
     if (!is_connected()) {
         std::cerr << "Cannot begin transaction: not connected" << std::endl;
@@ -69,7 +68,7 @@ bool PostgresConnector::begin_transaction() {
         return false;
     }
     
-    if (execute_simple_query("BEGIN;")) {
+    if (execute_simple_query("BEGIN")) {
         in_transaction_ = true;
         std::cout << "✓ Transaction started" << std::endl;
         return true;
@@ -89,7 +88,7 @@ bool PostgresConnector::commit_transaction() {
         return false;
     }
     
-    if (execute_simple_query("COMMIT;")) {
+    if (execute_simple_query("COMMIT")) {
         in_transaction_ = false;
         std::cout << "✓ Transaction committed" << std::endl;
         return true;
@@ -109,7 +108,7 @@ bool PostgresConnector::rollback_transaction() {
         return false;
     }
     
-    if (execute_simple_query("ROLLBACK;")) {
+    if (execute_simple_query("ROLLBACK")) {
         in_transaction_ = false;
         std::cout << "✓ Transaction rolled back" << std::endl;
         return true;
@@ -147,14 +146,13 @@ bool PostgresConnector::execute_batch(const std::vector<std::string>& queries) {
         std::cerr << "Batch execution failed: " << e.what() << std::endl;
         
         if (!was_in_transaction) {
-            rollback_transaction();         
+            rollback_transaction();
         }
         
         return false;
     }
 }
 
-// Функция для преобразования OID в человекочитаемое имя типа
 std::string PostgresConnector::oid_to_type_name(Oid type_oid) const {
     static const std::unordered_map<Oid, std::string> type_map = {
         {16, "bool"}, {17, "bytea"}, {18, "char"}, {20, "int8"}, {21, "int2"},
@@ -196,6 +194,7 @@ QueryResult PostgresConnector::execute(const std::string& query) {
         throw std::runtime_error("Not connected to PostgreSQL");
     }
 
+    // COUNT запрос
     std::string count_query;
     
     if (query.find("SELECT") != std::string::npos && 
@@ -205,7 +204,6 @@ QueryResult PostgresConnector::execute(const std::string& query) {
         if (from_pos != std::string::npos) {
             count_query = "SELECT COUNT(*) " + query.substr(from_pos);
             
-            // Убираем ORDER BY, LIMIT, OFFSET для корректного подсчета
             size_t order_pos = count_query.find("ORDER BY");
             if (order_pos != std::string::npos) {
                 count_query = count_query.substr(0, order_pos);
@@ -227,6 +225,7 @@ QueryResult PostgresConnector::execute(const std::string& query) {
         count_query = query;
     }
     
+    // Выполняем COUNT запрос
     try {
         PGresult* count_res = PQexec(connection_, count_query.c_str());
         if (PQresultStatus(count_res) == PGRES_TUPLES_OK && PQntuples(count_res) > 0) {
@@ -240,6 +239,7 @@ QueryResult PostgresConnector::execute(const std::string& query) {
         result.count = 0;
     }
 
+    // Основной запрос
     PGresult* res = PQexec(connection_, query.c_str());
     
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
@@ -248,6 +248,7 @@ QueryResult PostgresConnector::execute(const std::string& query) {
         throw std::runtime_error("Query failed: " + error);
     }
 
+    // Получаем информацию о колонках
     int num_cols = PQnfields(res);
     for (int i = 0; i < num_cols; ++i) {
         ColumnInfo col;
@@ -257,18 +258,20 @@ QueryResult PostgresConnector::execute(const std::string& query) {
         result.columns.push_back(col);
     }
 
+    // Получаем данные - ИСПРАВЛЕННАЯ ЧАСТЬ
     int num_rows = PQntuples(res);
     for (int i = 0; i < num_rows; ++i) {
-        std::vector<std::string> row;
+        std::vector<Value> row;  // Теперь используем Value
+        
         for (int j = 0; j < num_cols; ++j) {
             char* value = PQgetvalue(res, i, j);
             if (value != nullptr) {
-                row.push_back(std::string(value));
+                row.push_back(std::string(value));  // std::string в variant
             } else {
-                row.push_back("NULL");
+                row.push_back(nullptr);  // nullptr_t в variant
             }
         }
-        result.rows.push_back(row);
+        result.rows.push_back(row);  // Теперь типы совпадают
     }
 
     if (result.count == 0) {

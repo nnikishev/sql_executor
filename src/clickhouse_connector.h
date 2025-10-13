@@ -4,11 +4,13 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include "common.h"  
+#include "common.h"
 
 namespace clickhouse {
     class Client;
     class ClientOptions;
+    class ColumnNullable; 
+    class ColumnUUID;     
 }
 
 class ClickHouseConnector {

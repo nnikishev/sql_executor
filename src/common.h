@@ -4,26 +4,43 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <variant>
 
+// Используем variant для хранения разных типов значений
+using Value = std::variant<std::string, std::nullptr_t>;
+
+// Структура для информации о колонке
 struct ColumnInfo {
     std::string name;
     std::string type;
 };
 
+// Структура для результата запроса
 struct QueryResult {
-    std::vector<std::vector<std::string>> rows;
+    std::vector<std::vector<Value>> rows;  // Теперь используем Value вместо std::string
     std::vector<ColumnInfo> columns;
-    size_t count = 0;  
+    size_t count = 0;
     
+    // Метод для преобразования в JSON строку
     std::string to_json() const {
         std::ostringstream json;
         
         json << "{\"rows\":[";
         
+        // Обрабатываем строки
         for (size_t i = 0; i < rows.size(); ++i) {
             json << "{";
             for (size_t j = 0; j < rows[i].size() && j < columns.size(); ++j) {
-                json << "\"" << escape_json(columns[j].name) << "\":\"" << escape_json(rows[i][j]) << "\"";
+                json << "\"" << escape_json(columns[j].name) << "\":";
+                
+                // Обрабатываем разные типы значений
+                if (std::holds_alternative<std::nullptr_t>(rows[i][j])) {
+                    json << "null";
+                } else {
+                    const std::string& str_val = std::get<std::string>(rows[i][j]);
+                    json << "\"" << escape_json(str_val) << "\"";
+                }
+                
                 if (j < rows[i].size() - 1) {
                     json << ",";
                 }
@@ -36,6 +53,7 @@ struct QueryResult {
         
         json << "],\"columns\":[";
         
+        // Обрабатываем колонки
         for (size_t i = 0; i < columns.size(); ++i) {
             json << "{\"name\":\"" << escape_json(columns[i].name) 
                  << "\",\"type\":\"" << escape_json(columns[i].type) << "\"}";
@@ -50,6 +68,7 @@ struct QueryResult {
     }
 
 private:
+    // Вспомогательная функция для экранирования JSON строк
     static std::string escape_json(const std::string& str) {
         std::ostringstream oss;
         for (char c : str) {

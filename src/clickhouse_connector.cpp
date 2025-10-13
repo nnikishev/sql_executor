@@ -8,6 +8,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
+#include <cstdio>
 
 using namespace clickhouse;
 
@@ -29,7 +30,6 @@ bool ClickHouseConnector::connect(const std::string& host, int port,
         options.SetPassword(password);
         
         client_ = std::make_unique<Client>(options);
-        
         client_->Execute("SELECT 1");
         return true;
         
@@ -55,7 +55,7 @@ std::string ClickHouseConnector::normalize_type_name(const std::string& type_nam
         size_t start = result.find('(') + 1;
         size_t end = result.rfind(')');
         if (start != std::string::npos && end != std::string::npos) {
-            result = result.substr(start, end - start) + "?";
+            result = result.substr(start, end - start);
         }
     }
     
@@ -70,54 +70,80 @@ std::string ClickHouseConnector::normalize_type_name(const std::string& type_nam
     return result;
 }
 
-std::string value_to_string(const ColumnRef& column, size_t row_idx) {
-    
-    if (auto col = column->As<ColumnString>()) {
-        std::string_view sv = col->At(row_idx);
-        return std::string(sv);
-    }
-    else if (auto col = column->As<ColumnFixedString>()) {
-        std::string_view sv = col->At(row_idx);
-        return std::string(sv);
-    }
-    else if (auto col = column->As<ColumnInt8>()) {
-        return std::to_string(col->At(row_idx));
-    }
-    else if (auto col = column->As<ColumnInt16>()) {
-        return std::to_string(col->At(row_idx));
-    }
-    else if (auto col = column->As<ColumnInt32>()) {
-        return std::to_string(col->At(row_idx));
-    }
-    else if (auto col = column->As<ColumnInt64>()) {
-        return std::to_string(col->At(row_idx));
-    }
-    else if (auto col = column->As<ColumnUInt8>()) {
-        return std::to_string(col->At(row_idx));
-    }
-    else if (auto col = column->As<ColumnUInt16>()) {
-        return std::to_string(col->At(row_idx));
-    }
-    else if (auto col = column->As<ColumnUInt32>()) {
-        return std::to_string(col->At(row_idx));
-    }
-    else if (auto col = column->As<ColumnUInt64>()) {
-        return std::to_string(col->At(row_idx));
-    }
-    else if (auto col = column->As<ColumnFloat32>()) {
-        return std::to_string(col->At(row_idx));
-    }
-    else if (auto col = column->As<ColumnFloat64>()) {
-        return std::to_string(col->At(row_idx));
-    }
-    else if (auto col = column->As<ColumnDate>()) {
-        return std::to_string(col->At(row_idx));
-    }
-    else if (auto col = column->As<ColumnDateTime>()) {
-        return std::to_string(col->At(row_idx));
-    }
-    else {
-        return "[" + column->Type()->GetName() + "]";
+// ИСПРАВЛЕННАЯ функция - убрали ColumnBool
+Value value_to_variant(const ColumnRef& column, size_t row_idx) {
+    try {
+        // Обрабатываем Nullable типы
+        if (auto nullable_col = column->As<ColumnNullable>()) {
+            if (nullable_col->IsNull(row_idx)) {
+                return nullptr;
+            }
+            auto nested_column = nullable_col->Nested();
+            return value_to_variant(nested_column, row_idx);
+        }
+        
+        // Обрабатываем основные типы данных
+        if (auto col = column->As<ColumnString>()) {
+            std::string_view sv = col->At(row_idx);
+            return std::string(sv);
+        }
+        else if (auto col = column->As<ColumnFixedString>()) {
+            std::string_view sv = col->At(row_idx);
+            return std::string(sv);
+        }
+        else if (auto col = column->As<ColumnInt8>()) {
+            return std::to_string(col->At(row_idx));
+        }
+        else if (auto col = column->As<ColumnInt16>()) {
+            return std::to_string(col->At(row_idx));
+        }
+        else if (auto col = column->As<ColumnInt32>()) {
+            return std::to_string(col->At(row_idx));
+        }
+        else if (auto col = column->As<ColumnInt64>()) {
+            return std::to_string(col->At(row_idx));
+        }
+        else if (auto col = column->As<ColumnUInt8>()) {
+            return std::to_string(col->At(row_idx));
+        }
+        else if (auto col = column->As<ColumnUInt16>()) {
+            return std::to_string(col->At(row_idx));
+        }
+        else if (auto col = column->As<ColumnUInt32>()) {
+            return std::to_string(col->At(row_idx));
+        }
+        else if (auto col = column->As<ColumnUInt64>()) {
+            return std::to_string(col->At(row_idx));
+        }
+        else if (auto col = column->As<ColumnFloat32>()) {
+            return std::to_string(col->At(row_idx));
+        }
+        else if (auto col = column->As<ColumnFloat64>()) {
+            return std::to_string(col->At(row_idx));
+        }
+        // УБРАЛИ ColumnBool - его нет в этой версии clickhouse-cpp
+        else if (auto col = column->As<ColumnDate>()) {
+            return std::to_string(col->At(row_idx));
+        }
+        else if (auto col = column->As<ColumnDateTime>()) {
+            return std::to_string(col->At(row_idx));
+        }
+        else if (auto col = column->As<ColumnUUID>()) {
+            auto uuid = col->At(row_idx);
+            char buf[37];
+            snprintf(buf, sizeof(buf), "%08lx-%04lx-%04lx-%04lx-%012lx",
+                     (unsigned long)(uuid.first >> 32),
+                     (unsigned long)((uuid.first >> 16) & 0xFFFF),
+                     (unsigned long)(uuid.first & 0xFFFF),
+                     (unsigned long)(uuid.second >> 48),
+                     (unsigned long)(uuid.second & 0xFFFFFFFFFFFF));
+            return std::string(buf);
+        }
+        else {
+            return "[" + column->Type()->GetName() + "]";
+        }
+    } catch (const std::exception& e) {
+        return "[ERROR: " + std::string(e.what()) + "]";
     }
 }
 
@@ -128,6 +154,7 @@ QueryResult ClickHouseConnector::execute(const std::string& query) {
         throw std::runtime_error("Not connected to ClickHouse");
     }
 
+    // COUNT запрос
     std::string count_query;
     
     if (query.find("SELECT") != std::string::npos && 
@@ -137,7 +164,6 @@ QueryResult ClickHouseConnector::execute(const std::string& query) {
         if (from_pos != std::string::npos) {
             count_query = "SELECT COUNT(*) " + query.substr(from_pos);
             
-            // Убираем ORDER BY, LIMIT для корректного подсчета
             size_t order_pos = count_query.find("ORDER BY");
             if (order_pos != std::string::npos) {
                 count_query = count_query.substr(0, order_pos);
@@ -165,6 +191,7 @@ QueryResult ClickHouseConnector::execute(const std::string& query) {
         }
     }
 
+    // Основной запрос
     try {
         size_t total_rows = 0;
         
@@ -185,11 +212,11 @@ QueryResult ClickHouseConnector::execute(const std::string& query) {
             total_rows += row_count;
             
             for (size_t row_idx = 0; row_idx < row_count; ++row_idx) {
-                std::vector<std::string> row;
+                std::vector<Value> row;
                 
                 for (size_t col_idx = 0; col_idx < block.GetColumnCount(); ++col_idx) {
                     auto column = block[col_idx];
-                    std::string value = value_to_string(column, row_idx);
+                    Value value = value_to_variant(column, row_idx);
                     row.push_back(value);
                 }
                 
