@@ -39,3 +39,8 @@
 
 # debug information files
 *.dwo
+
+build/
+sql_executor*
+venv/
+test*
