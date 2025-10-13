@@ -5,21 +5,30 @@
 
 PostgresConnector::PostgresConnector() {
     connection_ = nullptr;
+    in_transaction_ = false;
 }
 
 PostgresConnector::~PostgresConnector() {
+    if (in_transaction_ && connection_) {
+        rollback_transaction();
+    }
     disconnect();
 }
 
 bool PostgresConnector::connect(const std::string& conninfo) {
     connection_ = PQconnectdb(conninfo.c_str());
+    in_transaction_ = false;  
     return PQstatus(connection_) == CONNECTION_OK;
 }
 
 void PostgresConnector::disconnect() {
     if (connection_ != nullptr) {
+        if (in_transaction_) {
+            rollback_transaction();
+        }
         PQfinish(connection_);
         connection_ = nullptr;
+        in_transaction_ = false;
     }
 }
 
@@ -27,72 +36,137 @@ bool PostgresConnector::is_connected() const {
     return connection_ != nullptr && PQstatus(connection_) == CONNECTION_OK;
 }
 
+bool PostgresConnector::is_in_transaction() const {
+    return in_transaction_;
+}
+
+bool PostgresConnector::execute_simple_query(const std::string& query) {
+    if (!is_connected()) {
+        return false;
+    }
+
+    PGresult* res = PQexec(connection_, query.c_str());
+    bool success = (PQresultStatus(res) == PGRES_COMMAND_OK || 
+                    PQresultStatus(res) == PGRES_TUPLES_OK);
+    
+    if (!success) {
+        std::cerr << "Query failed: " << PQresultErrorMessage(res) << std::endl;
+    }
+    
+    PQclear(res);
+    return success;
+}
+
+
+bool PostgresConnector::begin_transaction() {
+    if (!is_connected()) {
+        std::cerr << "Cannot begin transaction: not connected" << std::endl;
+        return false;
+    }
+    
+    if (in_transaction_) {
+        std::cerr << "Transaction already active" << std::endl;
+        return false;
+    }
+    
+    if (execute_simple_query("BEGIN;")) {
+        in_transaction_ = true;
+        std::cout << "✓ Transaction started" << std::endl;
+        return true;
+    }
+    
+    return false;
+}
+
+bool PostgresConnector::commit_transaction() {
+    if (!is_connected()) {
+        std::cerr << "Cannot commit transaction: not connected" << std::endl;
+        return false;
+    }
+    
+    if (!in_transaction_) {
+        std::cerr << "No active transaction to commit" << std::endl;
+        return false;
+    }
+    
+    if (execute_simple_query("COMMIT;")) {
+        in_transaction_ = false;
+        std::cout << "✓ Transaction committed" << std::endl;
+        return true;
+    }
+    
+    return false;
+}
+
+bool PostgresConnector::rollback_transaction() {
+    if (!is_connected()) {
+        std::cerr << "Cannot rollback transaction: not connected" << std::endl;
+        return false;
+    }
+    
+    if (!in_transaction_) {
+        std::cerr << "No active transaction to rollback" << std::endl;
+        return false;
+    }
+    
+    if (execute_simple_query("ROLLBACK;")) {
+        in_transaction_ = false;
+        std::cout << "✓ Transaction rolled back" << std::endl;
+        return true;
+    }
+    
+    return false;
+}
+
+bool PostgresConnector::execute_batch(const std::vector<std::string>& queries) {
+    if (!is_connected()) {
+        std::cerr << "Cannot execute batch: not connected" << std::endl;
+        return false;
+    }
+    
+    bool was_in_transaction = in_transaction_;
+    
+    if (!was_in_transaction && !begin_transaction()) {
+        return false;
+    }
+    
+    try {
+        for (const auto& query : queries) {
+            if (!execute_simple_query(query)) {
+                throw std::runtime_error("Batch query failed: " + query);
+            }
+        }
+        
+        if (!was_in_transaction) {
+            return commit_transaction();
+        }
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Batch execution failed: " << e.what() << std::endl;
+        
+        if (!was_in_transaction) {
+            rollback_transaction();         
+        }
+        
+        return false;
+    }
+}
+
+// Функция для преобразования OID в человекочитаемое имя типа
 std::string PostgresConnector::oid_to_type_name(Oid type_oid) const {
     static const std::unordered_map<Oid, std::string> type_map = {
-        // Числовые типы
-        {16, "bool"},           // boolean
-        {17, "bytea"},          // byte array
-        {18, "char"},           // character
-        {20, "int8"},           // bigint
-        {21, "int2"},           // smallint
-        {23, "int4"},           // integer
-        {26, "oid"},            // object identifier
-        {700, "float4"},        // real
-        {701, "float8"},        // double precision
-        {1700, "numeric"},      // numeric/decimal
-        
-        // Строковые типы
-        {25, "text"},           // text
-        {1043, "varchar"},      // character varying
-        {1042, "bpchar"},       // character
-        {19, "name"},           // name
-        {2275, "cstring"},      // cstring
-        
-        // Дата и время
-        {1082, "date"},         // date
-        {1083, "time"},         // time
-        {1114, "timestamp"},    // timestamp without timezone
-        {1184, "timestamptz"},  // timestamp with timezone
-        {1186, "interval"},     // interval
-        {1266, "timetz"},       // time with timezone
-        
-        // JSON
-        {114, "json"},          // json
-        {3802, "jsonb"},        // json binary
-        
-        // Массивы
-        {1000, "bool[]"},       // boolean array
-        {1005, "int2[]"},       // smallint array
-        {1007, "int4[]"},       // integer array
-        {1016, "int8[]"},       // bigint array
-        {1021, "float4[]"},     // real array
-        {1022, "float8[]"},     // double precision array
-        {1009, "text[]"},       // text array
-        {1015, "varchar[]"},    // varchar array
-        {1231, "numeric[]"},    // numeric array
-        
-        // Геометрические типы
-        {600, "point"},         // point
-        {601, "line"},          // line
-        {602, "lseg"},         // line segment
-        {603, "box"},          // box
-        {604, "path"},         // path
-        {628, "line"},         // line (another)
-        
-        // Сетевые адреса
-        {869, "inet"},          // inet
-        {650, "cidr"},          // cidr
-        {1040, "macaddr"},      // macaddr
-        {1041, "macaddr8"},     // macaddr8
-        
-        // XML
-        {142, "xml"},           // xml
-        
-        // UUID
-        {2950, "uuid"},         // uuid
-        
-        // Двоичные данные
-        {2278, "bytea"},        // byte array
+        {16, "bool"}, {17, "bytea"}, {18, "char"}, {20, "int8"}, {21, "int2"},
+        {23, "int4"}, {26, "oid"}, {700, "float4"}, {701, "float8"}, {1700, "numeric"},
+        {25, "text"}, {1043, "varchar"}, {1042, "bpchar"}, {19, "name"}, {2275, "cstring"},
+        {1082, "date"}, {1083, "time"}, {1114, "timestamp"}, {1184, "timestamptz"},
+        {1186, "interval"}, {1266, "timetz"}, {114, "json"}, {3802, "jsonb"},
+        {1000, "bool[]"}, {1005, "int2[]"}, {1007, "int4[]"}, {1016, "int8[]"},
+        {1021, "float4[]"}, {1022, "float8[]"}, {1009, "text[]"}, {1015, "varchar[]"},
+        {1231, "numeric[]"}, {600, "point"}, {601, "line"}, {602, "lseg"}, {603, "box"},
+        {604, "path"}, {628, "line"}, {869, "inet"}, {650, "cidr"}, {1040, "macaddr"},
+        {1041, "macaddr8"}, {142, "xml"}, {2950, "uuid"}, {2278, "bytea"}
     };
     
     auto it = type_map.find(type_oid);
@@ -122,6 +196,50 @@ QueryResult PostgresConnector::execute(const std::string& query) {
         throw std::runtime_error("Not connected to PostgreSQL");
     }
 
+    std::string count_query;
+    
+    if (query.find("SELECT") != std::string::npos && 
+        query.find("COUNT(") == std::string::npos) {
+        
+        size_t from_pos = query.find("FROM");
+        if (from_pos != std::string::npos) {
+            count_query = "SELECT COUNT(*) " + query.substr(from_pos);
+            
+            // Убираем ORDER BY, LIMIT, OFFSET для корректного подсчета
+            size_t order_pos = count_query.find("ORDER BY");
+            if (order_pos != std::string::npos) {
+                count_query = count_query.substr(0, order_pos);
+            }
+            
+            size_t limit_pos = count_query.find("LIMIT");
+            if (limit_pos != std::string::npos) {
+                count_query = count_query.substr(0, limit_pos);
+            }
+            
+            size_t offset_pos = count_query.find("OFFSET");
+            if (offset_pos != std::string::npos) {
+                count_query = count_query.substr(0, offset_pos);
+            }
+        }
+    }
+    
+    if (count_query.empty()) {
+        count_query = query;
+    }
+    
+    try {
+        PGresult* count_res = PQexec(connection_, count_query.c_str());
+        if (PQresultStatus(count_res) == PGRES_TUPLES_OK && PQntuples(count_res) > 0) {
+            char* count_str = PQgetvalue(count_res, 0, 0);
+            if (count_str) {
+                result.count = std::stoul(count_str);
+            }
+        }
+        PQclear(count_res);
+    } catch (...) {
+        result.count = 0;
+    }
+
     PGresult* res = PQexec(connection_, query.c_str());
     
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
@@ -134,10 +252,8 @@ QueryResult PostgresConnector::execute(const std::string& query) {
     for (int i = 0; i < num_cols; ++i) {
         ColumnInfo col;
         col.name = PQfname(res, i);
-        
         Oid type_oid = PQftype(res, i);
         col.type = oid_to_type_name(type_oid);
-        
         result.columns.push_back(col);
     }
 
@@ -153,6 +269,10 @@ QueryResult PostgresConnector::execute(const std::string& query) {
             }
         }
         result.rows.push_back(row);
+    }
+
+    if (result.count == 0) {
+        result.count = num_rows;
     }
 
     PQclear(res);

@@ -5,7 +5,6 @@
 #include <vector>
 #include <sstream>
 
-
 struct ColumnInfo {
     std::string name;
     std::string type;
@@ -14,6 +13,7 @@ struct ColumnInfo {
 struct QueryResult {
     std::vector<std::vector<std::string>> rows;
     std::vector<ColumnInfo> columns;
+    size_t count = 0;  
     
     std::string to_json() const {
         std::ostringstream json;
@@ -44,7 +44,7 @@ struct QueryResult {
             }
         }
         
-        json << "]}";
+        json << "],\"count\":" << count << "}";
         
         return json.str();
     }
