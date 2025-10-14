@@ -33,4 +33,4 @@ private:
     std::string normalize_type_name(const std::string& type_name) const;
 };
 
-#endif
+#endif // CLICKHOUSE_CONNECTOR_H

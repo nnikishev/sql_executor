@@ -43,4 +43,6 @@
 build/
 sql_executor*
 venv/
-test*
+test*.py
+build
+.vscode
