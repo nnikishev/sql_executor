@@ -34,4 +34,4 @@ private:
     bool execute_simple_query(const std::string& query);
 };
 
-#endif
+#endif // POSTGRES_CONNECTOR_H
