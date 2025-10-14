@@ -229,11 +229,28 @@ QueryResult PostgresConnector::execute(const std::string& query) {
     std::string wrapped_query;
     wrapped_query.reserve(query.size() + 128);
 
+    std::string limit_clause;
+    {
+        // Регэксп ищет "LIMIT <число> [OFFSET <число>]" в конце строки
+        std::regex limit_regex(R"((?is)\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?\s*;?\s*$)");
+        std::smatch match;
+
+        if (std::regex_search(query, match, limit_regex)) {
+            limit_clause = match.str();                            // сохраняем LIMIT / OFFSET
+            query.erase(match.position(), match.length());          // вырезаем из подзапроса
+        }
+    }
+
     if (query.find("__total_count") != std::string::npos ||
-        query.find("COUNT(") != std::string::npos) {
+    query.find("COUNT(") != std::string::npos) {
         wrapped_query = query;
-    } else {
+    } else if (query.starts_with("SELECT") || query.starts_with("select")) {
         wrapped_query = "SELECT subq.*, COUNT(*) OVER() AS __total_count FROM (" + query + ") AS subq";
+        if (!limit_clause.empty()) {
+            wrapped_query += " " + limit_clause; // добавляем лимит снаружи
+        }
+    } else {
+        wrapped_query = query;
     }
 
     // Выполняем запрос
