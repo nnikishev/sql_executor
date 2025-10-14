@@ -77,6 +77,29 @@ bool PostgresConnector::begin_transaction() {
     return false;
 }
 
+int64_t PostgresConnector::get_current_transaction_id() {
+    if (!in_transaction_) {
+        return -1;
+    }
+    
+    try {
+        QueryResult result = execute("SELECT txid_current()");
+        if (!result.rows.empty() && !result.rows[0].empty()) {
+            const Value& txid_value = result.rows[0][0];
+            
+            if (std::holds_alternative<int64_t>(txid_value)) {
+                return std::get<int64_t>(txid_value);
+            } else if (std::holds_alternative<std::string>(txid_value)) {
+                return std::stoll(std::get<std::string>(txid_value));
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to get transaction ID: " << e.what() << std::endl;
+    }
+    
+    return -1;
+}
+
 bool PostgresConnector::commit_transaction() {
     if (!is_connected()) {
         std::cerr << "Cannot commit transaction: not connected" << std::endl;
@@ -131,9 +154,24 @@ bool PostgresConnector::execute_batch(const std::vector<std::string>& queries) {
     
     try {
         for (const auto& query : queries) {
-            if (!execute_simple_query(query)) {
-                throw std::runtime_error("Batch query failed: " + query);
+            PGresult* res = PQexec(connection_, query.c_str());
+            bool success = (PQresultStatus(res) == PGRES_COMMAND_OK || 
+                           PQresultStatus(res) == PGRES_TUPLES_OK);
+            
+            if (!success) {
+                std::string error = PQresultErrorMessage(res);
+                PQclear(res);
+                
+                if (!was_in_transaction) {
+                    rollback_transaction();
+                } else {
+                    rollback_transaction();
+                }
+                
+                throw std::runtime_error("Batch query failed: " + query + " - " + error);
             }
+            
+            PQclear(res);
         }
         
         if (!was_in_transaction) {
@@ -145,7 +183,7 @@ bool PostgresConnector::execute_batch(const std::vector<std::string>& queries) {
     } catch (const std::exception& e) {
         std::cerr << "Batch execution failed: " << e.what() << std::endl;
         
-        if (!was_in_transaction) {
+        if (in_transaction_) {
             rollback_transaction();
         }
         

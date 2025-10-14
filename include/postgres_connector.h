@@ -23,6 +23,7 @@ public:
     std::string execute_to_json(const std::string& query);
     
     bool begin_transaction();
+    int64_t get_current_transaction_id();
     bool commit_transaction();
     bool rollback_transaction();
     bool is_in_transaction() const;

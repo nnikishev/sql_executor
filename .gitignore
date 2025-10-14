@@ -44,3 +44,5 @@ build/
 sql_executor*
 venv/
 test*
+build
+.vscode
