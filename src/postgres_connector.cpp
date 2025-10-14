@@ -161,32 +161,28 @@ bool PostgresConnector::execute_batch(const std::vector<std::string>& queries) {
             if (!success) {
                 std::string error = PQresultErrorMessage(res);
                 PQclear(res);
-                
+
                 if (!was_in_transaction) {
                     rollback_transaction();
                 } else {
                     rollback_transaction();
                 }
-                
+
                 throw std::runtime_error("Batch query failed: " + query + " - " + error);
             }
-            
+
             PQclear(res);
         }
-        
+
         if (!was_in_transaction) {
             return commit_transaction();
         }
-        
+
         return true;
-        
+
     } catch (const std::exception& e) {
         std::cerr << "Batch execution failed: " << e.what() << std::endl;
-        
-        if (in_transaction_) {
-            rollback_transaction();
-        }
-        
+        if (in_transaction_) rollback_transaction();
         return false;
     }
 }
@@ -204,16 +200,16 @@ std::string PostgresConnector::oid_to_type_name(Oid type_oid) const {
         {604, "path"}, {628, "line"}, {869, "inet"}, {650, "cidr"}, {1040, "macaddr"},
         {1041, "macaddr8"}, {142, "xml"}, {2950, "uuid"}, {2278, "bytea"}
     };
-    
+
     auto it = type_map.find(type_oid);
     if (it != type_map.end()) {
         return it->second;
     }
-    
+
     if (is_connected()) {
         std::string query = "SELECT typname FROM pg_type WHERE oid = " + std::to_string(type_oid);
         PGresult* res = PQexec(connection_, query.c_str());
-        
+
         if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0) {
             std::string type_name = PQgetvalue(res, 0, 0);
             PQclear(res);
@@ -221,7 +217,7 @@ std::string PostgresConnector::oid_to_type_name(Oid type_oid) const {
         }
         PQclear(res);
     }
-    
+
     return "oid_" + std::to_string(type_oid);
 }
 
@@ -230,10 +226,18 @@ QueryResult PostgresConnector::execute(const std::string& query) {
         throw std::runtime_error("Not connected to PostgreSQL");
     }
 
-    QueryResult result;
+    std::string wrapped_query;
+    wrapped_query.reserve(query.size() + 128);
+
+    if (query.find("__total_count") != std::string::npos ||
+        query.find("COUNT(") != std::string::npos) {
+        wrapped_query = query;
+    } else {
+        wrapped_query = "SELECT subq.*, COUNT(*) OVER() AS __total_count FROM (" + query + ") AS subq";
+    }
 
     // Выполняем запрос
-    PGresult* res = PQexec(connection_, query.c_str());
+    PGresult* res = PQexec(connection_, wrapped_query.c_str());
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         std::string error = PQresultErrorMessage(res);
         PQclear(res);
@@ -242,46 +246,62 @@ QueryResult PostgresConnector::execute(const std::string& query) {
 
     const int num_cols = PQnfields(res);
     const int num_rows = PQntuples(res);
+
+    QueryResult result;
     result.rows.reserve(num_rows);
-    result.columns.reserve(num_cols);
+    result.columns.reserve(num_cols - 1);
+
+    int total_count_col = -1;
 
     // Формируем информацию о колонках
     for (int i = 0; i < num_cols; ++i) {
-        ColumnInfo col;
-        col.name = PQfname(res, i);
-        Oid type_oid = PQftype(res, i);
-        col.type = oid_to_type_name(type_oid);
-        result.columns.push_back(col);
+        std::string col_name = PQfname(res, i);
+        if (col_name == "__total_count") {
+            total_count_col = i;
+        } else {
+            ColumnInfo col;
+            col.name = std::move(col_name);
+            Oid type_oid = PQftype(res, i);
+            col.type = oid_to_type_name(type_oid);
+            result.columns.push_back(std::move(col));
+        }
     }
 
     // Читаем данные
     for (int i = 0; i < num_rows; ++i) {
         std::vector<Value> row;
-        row.reserve(num_cols);
+        row.reserve(num_cols - 1);
 
         for (int j = 0; j < num_cols; ++j) {
+            if (j == total_count_col) continue;
+
             if (PQgetisnull(res, i, j)) {
                 row.push_back(nullptr);
-            } else {
-                const char* val = PQgetvalue(res, i, j);
-                const std::string& type = result.columns[j].type;
+                continue;
+            }
 
-                if (type == "bool") {
-                    row.push_back(val[0] == 't');
-                } else if (type == "int2" || type == "int4" || type == "int8") {
-                    row.push_back(std::stoll(val));
-                } else if (type == "float4" || type == "float8" || type == "numeric") {
-                    row.push_back(std::stod(val));
-                } else {
-                    row.push_back(std::string(val));
-                }
+            const char* val = PQgetvalue(res, i, j);
+            const std::string& type = result.columns[j < total_count_col ? j : j - 1].type;
+
+            if (type == "bool") {
+                row.push_back(val[0] == 't');
+            } else if (type == "int2" || type == "int4" || type == "int8") {
+                row.push_back(std::stoll(val));
+            } else if (type == "float4" || type == "float8" || type == "numeric") {
+                row.push_back(std::stod(val));
+            } else {
+                row.push_back(std::string(val));
             }
         }
 
         result.rows.push_back(std::move(row));
     }
 
-    result.count = static_cast<size_t>(num_rows);
+    if (total_count_col >= 0 && num_rows > 0 && !PQgetisnull(res, 0, total_count_col)) {
+        result.count = std::stoll(PQgetvalue(res, 0, total_count_col));
+    } else {
+        result.count = num_rows;
+    }
 
     PQclear(res);
     return result;
