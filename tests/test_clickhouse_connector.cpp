@@ -9,7 +9,7 @@ TEST_CASE("ClickHouse connection", "[ClickHouseConnector]") {
     REQUIRE_FALSE(conn.is_connected());
 
     // Здесь лучше использовать тестовую ClickHouse или мок
-    bool ok = conn.connect("127.0.0.1", 9000, "default", "default", "");
+    bool ok = conn.connect("127.0.0.1", 19000, "default", "default", "");
     if (ok) {
         REQUIRE(conn.is_connected());
         conn.disconnect();
@@ -19,7 +19,7 @@ TEST_CASE("ClickHouse connection", "[ClickHouseConnector]") {
 
 TEST_CASE("ClickHouse execute basic query", "[ClickHouseConnector]") {
     ClickHouseConnector conn;
-    if (!conn.connect("127.0.0.1", 9000, "default", "default", "")) {
+    if (!conn.connect("127.0.0.1", 19000, "default", "default", "")) {
         WARN("Cannot connect to ClickHouse, skipping test");
         return;
     }

@@ -7,7 +7,7 @@ TEST_CASE("Postgres connection", "[PostgresConnector]") {
     PostgresConnector conn;
     REQUIRE_FALSE(conn.is_connected());
 
-    std::string conninfo = "host=127.0.0.1 port=5432 dbname=postgres user=postgres password=postgres";
+    std::string conninfo = "host=127.0.0.1 port=15432 dbname=postgres user=postgres password=postgres";
     if (conn.connect(conninfo)) {
         REQUIRE(conn.is_connected());
         conn.disconnect();
@@ -19,7 +19,7 @@ TEST_CASE("Postgres connection", "[PostgresConnector]") {
 
 TEST_CASE("Postgres execute basic query", "[PostgresConnector]") {
     PostgresConnector conn;
-    std::string conninfo = "host=127.0.0.1 port=5432 dbname=postgres user=postgres password=postgres";
+    std::string conninfo = "host=127.0.0.1 port=15432 dbname=postgres user=postgres password=postgres";
     if (!conn.connect(conninfo)) {
         WARN("Cannot connect to Postgres, skipping test");
         return;
