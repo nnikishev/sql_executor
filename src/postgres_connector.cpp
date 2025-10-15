@@ -1,5 +1,7 @@
 #include "postgres_connector.h"
 #include <iostream>
+#include <string>
+#include <regex>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -227,25 +229,30 @@ QueryResult PostgresConnector::execute(const std::string& query) {
     }
 
     std::string wrapped_query;
+    std::string query_;
+    
+    query_ = query;
+
     wrapped_query.reserve(query.size() + 128);
 
     std::string limit_clause;
     {
         // Регэксп ищет "LIMIT <число> [OFFSET <число>]" в конце строки
-        std::regex limit_regex(R"((?is)\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?\s*;?\s*$)");
+        std::regex limit_regex(R"(\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?\s*;?\s*$)", 
+                      std::regex_constants::icase | std::regex_constants::ECMAScript);
         std::smatch match;
 
-        if (std::regex_search(query, match, limit_regex)) {
+        if (std::regex_search(query_, match, limit_regex)) {
             limit_clause = match.str();                            // сохраняем LIMIT / OFFSET
-            query.erase(match.position(), match.length());          // вырезаем из подзапроса
+            query_.erase(match.position(), match.length());          // вырезаем из подзапроса
         }
     }
 
     if (query.find("__total_count") != std::string::npos ||
     query.find("COUNT(") != std::string::npos) {
-        wrapped_query = query;
-    } else if (query.starts_with("SELECT") || query.starts_with("select")) {
-        wrapped_query = "SELECT subq.*, COUNT(*) OVER() AS __total_count FROM (" + query + ") AS subq";
+        wrapped_query = query_;
+    } else if (query_.starts_with("SELECT") || query_.starts_with("select")) {
+        wrapped_query = "SELECT subq.*, COUNT(*) OVER() AS __total_count FROM (" + query_ + ") AS subq";
         if (!limit_clause.empty()) {
             wrapped_query += " " + limit_clause; // добавляем лимит снаружи
         }
